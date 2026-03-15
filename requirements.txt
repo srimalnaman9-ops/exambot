@@ -1,5 +1,5 @@
-streamlit
-google-generativeai
-pandas
-plotly
-python-dateutil
+streamlit>=1.35.0
+google-generativeai>=0.7.0
+pandas>=2.0.0
+plotly>=5.18.0
+ 
