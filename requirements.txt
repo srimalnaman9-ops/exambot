@@ -1,4 +1,15 @@
-streamlit
-google-generativeai
-pandas
-plotly
+# requirements.txt for IBCP Exam Prep AI Platform
+streamlit>=1.28.0
+google-generativeai>=0.3.2
+plotly>=5.17.0
+pandas>=2.0.3
+sqlite3
+python-dotenv>=1.0.0
+watchdog>=3.0.0
+altair>=5.1.2
+pyarrow>=12.0.1
+cachetools>=5.3.1
+requests>=2.31.0
+tenacity>=8.2.3
+numpy>=1.24.3
+pillow>=10.0.1
