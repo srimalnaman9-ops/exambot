@@ -27,9 +27,6 @@ st.markdown("""
     .mark-scheme { 
         background-color: #064E3B; padding: 25px; border-radius: 12px; color: #ECFDF5; border: 1px solid #10B981;
     }
-    .formula-card {
-        background-color: #0f172a; border: 1px solid #334155; padding: 15px; border-radius: 10px; margin-bottom: 10px;
-    }
     .timetable-card {
         background-color: #f8fafc; color: #1e293b; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #4F46E5;
     }
@@ -55,7 +52,7 @@ class DatabaseManager:
         self.conn.commit()
 
 # =============================================================================
-# 3. AI ENGINE (MCQ & STRUCTURED LOGIC)
+# 3. AI ENGINE
 # =============================================================================
 class AIEngine:
     def __init__(self):
@@ -101,110 +98,90 @@ def main():
     ai = AIEngine()
 
     st.sidebar.title("🚀 Exam Ascent AI")
-    page = st.sidebar.radio("Navigate", ["Dashboard", "Final Schedule", "Portion Checklist", "IB Formula Vault", "Practice Lab"])
+    page = st.sidebar.radio("Navigate", ["Dashboard", "Final Schedule", "Knowledge Vault", "Practice Lab"])
 
-    # SCHEDULE FROM PDF 
+    # TIMETABLE DATA FROM PDF
     schedule = [
         {"Date": "25.03.2026", "Sub": "Physics P-I", "Portion": "A.1 to A.5", "Dur": "2 hrs"},
-        {"Date": "26.03.2026", "Sub": "Physics P-II", "Portion": "B.1 to B.5", "Dur": "2.30 hrs"},
+        {"Date": "26.03.2026", "Sub": "Physics P-II", "Portion": "B.1 to B.2", "Dur": "2.30 hrs"},
         {"Date": "28.03.2026", "Sub": "Chemistry P-I", "Portion": "Structure: 1, 2 & 3", "Dur": "1.30 hrs"},
-        {"Date": "30.03.2026", "Sub": "Chemistry P-II", "Portion": "Structure: 1, 2 & 3", "Dur": "1.30 hrs"},
         {"Date": "06.04.2026", "Sub": "Maths P-I", "Portion": "Unit 1 Number & Algebra", "Dur": "2 hrs"},
-        {"Date": "07.04.2026", "Sub": "Maths P-II", "Portion": "Unit 2 & 3 (Trig)", "Dur": "2 hrs"},
-        {"Date": "09.04.2026", "Sub": "English P-I", "Portion": "Writing Task", "Dur": "1.15 hrs"},
-        {"Date": "10.04.2026", "Sub": "English P-II", "Portion": "Reading & Listening", "Dur": "1.45 hrs"}
+        {"Date": "07.04.2026", "Sub": "Maths P-II", "Portion": "Unit 2 Functions / Unit 3 Trig", "Dur": "2 hrs"},
     ]
 
     if page == "Dashboard":
-        st.title("Jain Vidyalaya: Ready for Final Ascent?")
+        st.title("Jain Vidyalaya Readiness")
         exam_date = datetime.datetime(2026, 3, 25)
         days = (exam_date - datetime.datetime.now()).days
         st.metric("Countdown to Physics", f"{days} Days")
         
         df = pd.read_sql("SELECT * FROM results", db.conn)
         if not df.empty:
-            st.plotly_chart(px.line(df, x='date', y='score', color='subject', title="Your Progress Trend"))
+            st.plotly_chart(px.line(df, x='date', y='score', color='subject', title="Your Progress"))
 
     elif page == "Final Schedule":
         st.title("🗓️ Final Ascent Assessment 2025-26")
         for s in schedule:
             st.markdown(f"""<div class='timetable-card'><strong>{s['Date']}</strong>: {s['Sub']} ({s['Dur']})<br><small>Focus: {s['Portion']}</small></div>""", unsafe_allow_html=True)
 
-    elif page == "Portion Checklist":
-        st.title("✅ Syllabus Checklist")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Physics & Chemistry")
-            st.checkbox("A.1 to A.5 (Mechanics) ")
-            st.checkbox("B.1 to B.5 (Energy/Fields) ")
-            st.checkbox("Chemistry Structure 1, 2, 3 ")
-        with c2:
-            st.subheader("Math & English")
-            st.checkbox("Unit 1: Number & Algebra ")
-            st.checkbox("Unit 2: Functions ")
-            st.checkbox("Unit 3: Trigonometry ")
-            st.checkbox("English Writing: Blog, Proposal, Essay ")
-
-    elif page == "IB Formula Vault":
-        st.title("🔢 IB Formula Vault")
-        sub_vault = st.selectbox("Select Subject", ["Mathematics HL", "Physics HL", "Chemistry SL"])
+    elif page == "Knowledge Vault":
+        st.title("📚 IB Knowledge Vault")
+        sub_v = st.selectbox("Subject", ["Physics HL", "Mathematics HL", "Chemistry SL"])
         
-        if sub_vault == "Mathematics HL":
-            with st.expander("Unit 1: Number & Algebra "):
-                st.latex(r"n^{th} \text{ term of arithmetic sequence: } u_n = u_1 + (n-1)d")
-                st.latex(r"\text{Sum of arithmetic series: } S_n = \frac{n}{2}(2u_1 + (n-1)d)")
-                st.latex(r"\text{Compound Interest: } FV = PV \times (1 + \frac{r}{100k})^{kn}")
-            with st.expander("Unit 3: Trigonometry "):
-                st.latex(r"\text{Sine Rule: } \frac{a}{\sin A} = \frac{b}{\sin B} = \frac{c}{\sin C}")
-                st.latex(r"\text{Cosine Rule: } c^2 = a^2 + b^2 - 2ab\cos C")
-                st.latex(r"\text{Area of Triangle: } A = \frac{1}{2}ab\sin C")
-
-        elif sub_vault == "Physics HL":
-            with st.expander("A.1 - A.5: Mechanics "):
-                st.latex(r"v = u + at \quad ; \quad s = ut + \frac{1}{2}at^2")
-                st.latex(r"F = ma \quad ; \quad p = mv")
-                st.latex(r"E_k = \frac{1}{2}mv^2 \quad ; \quad \Delta E_p = mg\Delta h")
-            with st.expander("B.1 - B.5: Energy & Fields "):
-                st.latex(r"P = \frac{\Delta E}{\Delta t} \quad ; \quad \text{Efficiency} = \frac{\text{useful work}}{\text{total work}}")
-
-        elif sub_vault == "Chemistry SL":
-            with st.expander("Structure 1, 2 & 3 "):
-                st.latex(r"n = \frac{m}{M} \quad ; \quad n = cV")
-                st.latex(r"PV = nRT \quad (\text{Ideal Gas Law})")
-                st.latex(r"\text{Percentage Yield} = \frac{\text{Experimental}}{\text{Theoretical}} \times 100")
+        if sub_v == "Physics HL":
+            with st.expander("Mechanics (A.1 - A.5)"):
+                st.markdown("**Summary:** Focuses on the motion of bodies and forces.")
+                st.latex(r"v = u + at \quad ; \quad F = ma")
+                
+        elif sub_v == "Mathematics HL":
+            with st.expander("Unit 1: Number & Algebra"):
+                st.markdown("**Arithmetic Sequence:** $u_n = u_1 + (n-1)d$")
+                
 
     elif page == "Practice Lab":
         st.title("🧪 Practice Lab")
-        sub = st.selectbox("Subject", ["Mathematics", "Physics", "Chemistry", "English"])
         
+        # PERSISTENT SETTINGS
+        sub = st.selectbox("Subject", ["Mathematics", "Physics", "Chemistry", "English"])
         topics = {
-            "Physics": ["Mechanics A.1-A.5 ", "Electricity B.1-B.5 "],
-            "Chemistry": ["Atomic Structure ", "Bonding ", "Periodicity "],
-            "Mathematics": ["Unit 1: Algebra ", "Unit 2: Functions ", "Unit 3: Trigonometry "],
-            "English": ["Proposal ", "Blog ", "Journal Entry ", "Formal Letter "]
+            "Physics": ["Mechanics A.1-A.5", "Energy/Fields B.1-B.2"],
+            "Chemistry": ["Structure 1: Particles", "Structure 2: Bonding", "Structure 3: Periodicity"],
+            "Mathematics": ["Unit 1: Algebra", "Unit 2: Functions", "Unit 3: Trigonometry"],
+            "English": ["Proposal", "Blog", "Journal Entry", "Formal Letter"]
         }
-        top = st.selectbox("Portion Focus", topics[sub])
-        q_style = st.radio("Question Style", ["MCQ", "Structured (Written)"])
+        top = st.selectbox("Topic Focus", topics[sub])
+        q_style = st.radio("Style", ["MCQ", "Structured (Written)"])
 
-        if st.button("Generate Question"):
-            with st.spinner("Analyzing IB patterns..."):
+        # BUTTON LOGIC USING SESSION STATE
+        if st.button("Generate New Question"):
+            with st.spinner("AI is researching exam patterns..."):
                 st.session_state.current_q = ai.generate(sub, top, q_style)
                 st.session_state.submitted = False
 
+        # DISPLAY QUESTION IF IT EXISTS IN STATE
         if "current_q" in st.session_state and st.session_state.current_q:
             q = st.session_state.current_q
             st.markdown(f"<div class='q-card'><h3>{q['question']}</h3></div>", unsafe_allow_html=True)
             
             if q_style == "MCQ":
-                ans = st.radio("Options:", q['options'], index=None)
+                ans = st.radio("Options:", q['options'], index=None, key="user_mcq")
                 if st.button("Check Answer"):
-                    st.session_state.submitted = True
-                    if ans == q['answer']: st.success("Correct!")
-                    else: st.error(f"Incorrect. Answer: {q['answer']}")
+                    if ans:
+                        st.session_state.submitted = True
+                        if ans == q['answer']:
+                            st.success("🎯 Correct!")
+                            db.save_score(sub, top, 1)
+                        else:
+                            st.error(f"❌ Incorrect. Answer: {q['answer']}")
+                            db.save_score(sub, top, 0)
+                    else:
+                        st.warning("Please select an option first.")
             else:
-                st.info("Write your solution. Click below to compare with the IB Mark Scheme.")
-                if st.button("Reveal Model Answer"): st.session_state.submitted = True
+                st.info("Write your solution. Click below to reveal the Mark Scheme.")
+                if st.button("Reveal Model Answer"):
+                    st.session_state.submitted = True
 
+            # REVEAL MARK SCHEME
             if st.session_state.get('submitted'):
                 st.markdown("---")
                 if q_style == "Structured (Written)":
