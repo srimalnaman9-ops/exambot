@@ -1,0 +1,6 @@
+streamlit
+google-generativeai
+pandas
+plotly
+sqlite3
+datetime
