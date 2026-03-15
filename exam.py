@@ -4,33 +4,31 @@ import sqlite3
 import json
 import pandas as pd
 import plotly.express as px
-import time
 import datetime
 import hashlib
 from typing import List, Optional
 from dataclasses import dataclass, asdict
 
 # =============================================================================
-# 1. PAGE & STYLE CONFIG
+# 1. PAGE CONFIG & STYLING
 # =============================================================================
 st.set_page_config(page_title="Exam Ascent AI", layout="wide", page_icon="🧪")
 
-# Custom CSS for UI
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     .stButton>button { 
         background: linear-gradient(90deg, #4F46E5, #7C3AED); 
-        color: white; border: none; font-weight: bold; height: 3.5em; width: 100%; border-radius: 12px;
+        color: white; border-radius: 12px; font-weight: bold; height: 3.5em; width: 100%;
     }
     .q-card { 
         background-color: #1e1e2f; padding: 30px; border-radius: 18px; 
-        border-left: 8px solid #6366F1; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+        border-left: 8px solid #6366F1; margin-bottom: 25px; color: #ffffff;
     }
     .mark-scheme { 
-        background-color: #064E3B; padding: 25px; border-radius: 12px; 
-        border: 1px solid #10B981; margin-top: 20px; color: #ECFDF5;
+        background-color: #064E3B; padding: 25px; border-radius: 12px; color: #ECFDF5; border: 1px solid #10B981;
+    }
+    .formula-card {
+        background-color: #0f172a; border: 1px solid #334155; padding: 15px; border-radius: 10px; margin-bottom: 10px;
     }
     .timetable-card {
         background-color: #f8fafc; color: #1e293b; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #4F46E5;
@@ -39,19 +37,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# 2. DATA MODELS & DATABASE
+# 2. DATABASE & MODELS
 # =============================================================================
-@dataclass
-class Question:
-    id: str
-    subject: str
-    topic: str
-    question_text: str
-    options: List[str]
-    correct_answer: str
-    explanation: str
-    difficulty: str
-
 class DatabaseManager:
     def __init__(self):
         self.conn = sqlite3.connect("exam_data.db", check_same_thread=False)
@@ -67,175 +54,162 @@ class DatabaseManager:
         self.conn.execute("INSERT INTO results VALUES (?, ?, ?, ?)", (sub, top, score, datetime.datetime.now()))
         self.conn.commit()
 
-    def save_question(self, q: Question):
-        self.conn.execute("INSERT OR REPLACE INTO saved VALUES (?, ?, ?, ?)", (q.id, q.subject, q.topic, json.dumps(asdict(q))))
-        self.conn.commit()
-
-db = DatabaseManager()
-
 # =============================================================================
-# 3. AI ENGINE (AUTO-MODEL + NARRATIVE PROMPTING)
+# 3. AI ENGINE (MCQ & STRUCTURED LOGIC)
 # =============================================================================
 class AIEngine:
     def __init__(self):
         api_key = st.secrets.get("GEMINI_API_KEY")
         if not api_key:
-            st.error("API Key not found!")
+            st.error("API Key missing! Add GEMINI_API_KEY to Streamlit Secrets.")
             st.stop()
         genai.configure(api_key=api_key)
-        self.model_name = self._detect_best_model()
-        self.model = genai.GenerativeModel(self.model_name)
+        self.model = genai.GenerativeModel(self._detect_model())
 
-    def _detect_best_model(self):
+    def _detect_model(self):
         try:
             available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            for target in ['models/gemini-1.5-flash', 'models/gemini-pro']:
-                if target in available: return target
-            return available[0]
-        except:
-            return "gemini-1.5-flash"
+            return "models/gemini-1.5-flash" if "models/gemini-1.5-flash" in available else "models/gemini-pro"
+        except: return "gemini-1.5-flash"
 
-    def generate(self, subject, topic, level):
-        level_label = "Standard Level (SL)" if subject == "Chemistry" else "Higher Level (HL)"
+    def generate(self, subject, topic, q_type):
+        level = "Standard Level (SL)" if subject == "Chemistry" else "Higher Level (HL)"
         
-        # FIXED: Prompt explicitly demands multi-sentence narrative word problems
+        format_instruction = ""
+        if q_type == "MCQ":
+            format_instruction = "Return ONLY JSON with: 'question' (narrative), 'options' (list of 4), 'answer' (exact string), 'explanation' (step-by-step)."
+        else:
+            format_instruction = "Create a multi-part structured question (Part a, b, c). Return ONLY JSON with: 'question' (narrative with parts), 'answer' (Full model answer), 'explanation' (Detailed mark scheme with point allocation)."
+
         prompt = f"""
         Act as an IB Senior Examiner. Research patterns from Revision Village and Save My Exams.
-        Create a complex {level_label} {subject} exam question for the topic: {topic}.
-        
-        STRICT RULES:
-        1. The 'question' must be a multi-sentence narrative word problem (like a real exam).
-        2. Do NOT just output numbers. Describe a physical or mathematical scenario.
-        3. Use LaTeX for ALL math symbols ($...$).
-        4. Provide an IB-style Mark Scheme for the explanation.
-        
-        Return ONLY JSON:
-        {{
-            "question": "Narrative question text here...",
-            "options": ["A", "B", "C", "D"],
-            "answer": "correct string",
-            "explanation": "Step-by-step marking guide..."
-        }}
+        Create a {level} {subject} {q_type} on '{topic}'.
+        Use LaTeX for all math ($...$). Ensure a complex narrative scenario.
+        {format_instruction}
         """
         try:
             response = self.model.generate_content(prompt)
-            clean_json = response.text.strip().replace("```json", "").replace("```", "")
-            data = json.loads(clean_json)
-            return Question(
-                id=hashlib.md5(data['question'].encode()).hexdigest()[:10],
-                subject=subject, topic=topic,
-                question_text=data['question'],
-                options=data['options'],
-                correct_answer=data['answer'],
-                explanation=data['explanation'],
-                difficulty=str(level)
-            )
+            data = json.loads(response.text.strip().replace("```json", "").replace("```", ""))
+            return data
         except: return None
 
 # =============================================================================
-# 4. UI LOGIC (WITH TIMETABLE & CHECKLIST)
+# 4. MAIN APP
 # =============================================================================
 def main():
-    st.sidebar.title("🚀 Exam Ascent AI")
-    st.sidebar.info(f"Engine: {AIEngine().model_name}")
-    
-    # PDF TIMETABLE DATA 
-    assessment_data = [
-        {"Date": "25.03.2026", "Sub": "Physics P-I", "Portion": "A.1 to A.5", "Time": "2 hrs"},
-        {"Date": "26.03.2026", "Sub": "Physics P-II", "Portion": "B.1 to B.5", "Time": "2.30 hrs"},
-        {"Date": "28.03.2026", "Sub": "Chemistry P-I", "Portion": "Structure: 1, 2 & 3", "Time": "1.30 hrs"},
-        {"Date": "06.04.2026", "Sub": "Maths P-I", "Portion": "Unit 1: Number & Algebra", "Time": "2 hrs"},
-        {"Date": "07.04.2026", "Sub": "Maths P-II/III", "Portion": "Unit 2 & 3 (Trig)", "Time": "2 hrs/1.15 hrs"},
-        {"Date": "09.04.2026", "Sub": "English P-I", "Portion": "Writing Tasks", "Time": "1.15 hrs"},
-        {"Date": "10.04.2026", "Sub": "English P-II", "Portion": "Reading & Listening", "Time": "1.45 hrs"}
-    ]
-
-    page = st.sidebar.radio("Navigate", ["Dashboard", "Final Schedule", "Portion Checklist", "Practice Lab", "Revision Bank"])
+    db = DatabaseManager()
     ai = AIEngine()
 
+    st.sidebar.title("🚀 Exam Ascent AI")
+    page = st.sidebar.radio("Navigate", ["Dashboard", "Final Schedule", "Portion Checklist", "IB Formula Vault", "Practice Lab"])
+
+    # SCHEDULE FROM PDF 
+    schedule = [
+        {"Date": "25.03.2026", "Sub": "Physics P-I", "Portion": "A.1 to A.5", "Dur": "2 hrs"},
+        {"Date": "26.03.2026", "Sub": "Physics P-II", "Portion": "B.1 to B.5", "Dur": "2.30 hrs"},
+        {"Date": "28.03.2026", "Sub": "Chemistry P-I", "Portion": "Structure: 1, 2 & 3", "Dur": "1.30 hrs"},
+        {"Date": "30.03.2026", "Sub": "Chemistry P-II", "Portion": "Structure: 1, 2 & 3", "Dur": "1.30 hrs"},
+        {"Date": "06.04.2026", "Sub": "Maths P-I", "Portion": "Unit 1 Number & Algebra", "Dur": "2 hrs"},
+        {"Date": "07.04.2026", "Sub": "Maths P-II", "Portion": "Unit 2 & 3 (Trig)", "Dur": "2 hrs"},
+        {"Date": "09.04.2026", "Sub": "English P-I", "Portion": "Writing Task", "Dur": "1.15 hrs"},
+        {"Date": "10.04.2026", "Sub": "English P-II", "Portion": "Reading & Listening", "Dur": "1.45 hrs"}
+    ]
+
     if page == "Dashboard":
-        st.title("Jain Vidyalaya Readiness")
-        # Countdown to first exam
-        days_left = (datetime.datetime(2026, 3, 25) - datetime.datetime.now()).days
-        st.metric("Countdown to Physics", f"{days_left} Days")
+        st.title("Jain Vidyalaya: Ready for Final Ascent?")
+        exam_date = datetime.datetime(2026, 3, 25)
+        days = (exam_date - datetime.datetime.now()).days
+        st.metric("Countdown to Physics", f"{days} Days")
         
         df = pd.read_sql("SELECT * FROM results", db.conn)
         if not df.empty:
-            fig = px.line(df, x='date', y='score', color='subject', title="Score Trends")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(px.line(df, x='date', y='score', color='subject', title="Your Progress Trend"))
 
     elif page == "Final Schedule":
         st.title("🗓️ Final Ascent Assessment 2025-26")
-        for item in assessment_data:
-            st.markdown(f"""
-            <div class="timetable-card">
-                <strong>{item['Date']}</strong> | {item['Sub']} ({item['Time']})<br>
-                <small>Focus: {item['Portion']}</small>
-            </div>
-            """, unsafe_allow_html=True)
+        for s in schedule:
+            st.markdown(f"""<div class='timetable-card'><strong>{s['Date']}</strong>: {s['Sub']} ({s['Dur']})<br><small>Focus: {s['Portion']}</small></div>""", unsafe_allow_html=True)
 
     elif page == "Portion Checklist":
         st.title("✅ Syllabus Checklist")
-        col1, col2 = st.columns(2)
-        with col1:
+        c1, c2 = st.columns(2)
+        with c1:
             st.subheader("Physics & Chemistry")
-            st.checkbox("A.1 to A.5 (Physics Paper I)") [cite: 6]
-            st.checkbox("B.1 to B.5 (Physics Paper II)") [cite: 6]
-            st.checkbox("Structure: 1, 2, 3 (Chemistry)") [cite: 6]
-        with col2:
+            st.checkbox("A.1 to A.5 (Mechanics) ")
+            st.checkbox("B.1 to B.5 (Energy/Fields) ")
+            st.checkbox("Chemistry Structure 1, 2, 3 ")
+        with c2:
             st.subheader("Math & English")
-            st.checkbox("Unit 1: Number & Algebra") [cite: 6]
-            st.checkbox("Unit 2: Functions") [cite: 6]
-            st.checkbox("Unit 3: Trigonometry") [cite: 6]
-            st.checkbox("English Writing: Blog, Proposal, Essay, etc.") [cite: 6]
+            st.checkbox("Unit 1: Number & Algebra ")
+            st.checkbox("Unit 2: Functions ")
+            st.checkbox("Unit 3: Trigonometry ")
+            st.checkbox("English Writing: Blog, Proposal, Essay ")
+
+    elif page == "IB Formula Vault":
+        st.title("🔢 IB Formula Vault")
+        sub_vault = st.selectbox("Select Subject", ["Mathematics HL", "Physics HL", "Chemistry SL"])
+        
+        if sub_vault == "Mathematics HL":
+            with st.expander("Unit 1: Number & Algebra "):
+                st.latex(r"n^{th} \text{ term of arithmetic sequence: } u_n = u_1 + (n-1)d")
+                st.latex(r"\text{Sum of arithmetic series: } S_n = \frac{n}{2}(2u_1 + (n-1)d)")
+                st.latex(r"\text{Compound Interest: } FV = PV \times (1 + \frac{r}{100k})^{kn}")
+            with st.expander("Unit 3: Trigonometry "):
+                st.latex(r"\text{Sine Rule: } \frac{a}{\sin A} = \frac{b}{\sin B} = \frac{c}{\sin C}")
+                st.latex(r"\text{Cosine Rule: } c^2 = a^2 + b^2 - 2ab\cos C")
+                st.latex(r"\text{Area of Triangle: } A = \frac{1}{2}ab\sin C")
+
+        elif sub_vault == "Physics HL":
+            with st.expander("A.1 - A.5: Mechanics "):
+                st.latex(r"v = u + at \quad ; \quad s = ut + \frac{1}{2}at^2")
+                st.latex(r"F = ma \quad ; \quad p = mv")
+                st.latex(r"E_k = \frac{1}{2}mv^2 \quad ; \quad \Delta E_p = mg\Delta h")
+            with st.expander("B.1 - B.5: Energy & Fields "):
+                st.latex(r"P = \frac{\Delta E}{\Delta t} \quad ; \quad \text{Efficiency} = \frac{\text{useful work}}{\text{total work}}")
+
+        elif sub_vault == "Chemistry SL":
+            with st.expander("Structure 1, 2 & 3 "):
+                st.latex(r"n = \frac{m}{M} \quad ; \quad n = cV")
+                st.latex(r"PV = nRT \quad (\text{Ideal Gas Law})")
+                st.latex(r"\text{Percentage Yield} = \frac{\text{Experimental}}{\text{Theoretical}} \times 100")
 
     elif page == "Practice Lab":
         st.title("🧪 Practice Lab")
-        c1, c2, c3 = st.columns(3)
-        sub = c1.selectbox("Subject", ["Mathematics", "Physics", "Chemistry", "English"])
+        sub = st.selectbox("Subject", ["Mathematics", "Physics", "Chemistry", "English"])
         
-        # Syllabus maps based on assessment schedule 
-        syllabus = {
-            "Physics": ["Mechanics A.1-A.5", "Fields & Thermal B.1-B.5"],
-            "Chemistry": ["Structure 1: Particles", "Structure 2: Bonding", "Structure 3: Periodicity"],
-            "Mathematics": ["Unit 1: Algebra", "Unit 2: Functions", "Unit 3: Trigonometry"],
-            "English": ["Formal Letter", "Journal Entry", "Proposal", "Essay", "Blog"]
+        topics = {
+            "Physics": ["Mechanics A.1-A.5 ", "Electricity B.1-B.5 "],
+            "Chemistry": ["Atomic Structure ", "Bonding ", "Periodicity "],
+            "Mathematics": ["Unit 1: Algebra ", "Unit 2: Functions ", "Unit 3: Trigonometry "],
+            "English": ["Proposal ", "Blog ", "Journal Entry ", "Formal Letter "]
         }
-        top = c2.selectbox("Focus Topic", syllabus[sub])
-        lvl = c3.slider("Difficulty", 1, 5, 3)
+        top = st.selectbox("Portion Focus", topics[sub])
+        q_style = st.radio("Question Style", ["MCQ", "Structured (Written)"])
 
-        if st.button("Generate Exam Question"):
-            with st.spinner("AI Generating Narrative Scenario..."):
-                st.session_state.current_q = ai.generate(sub, top, lvl)
+        if st.button("Generate Question"):
+            with st.spinner("Analyzing IB patterns..."):
+                st.session_state.current_q = ai.generate(sub, top, q_style)
                 st.session_state.submitted = False
 
         if "current_q" in st.session_state and st.session_state.current_q:
             q = st.session_state.current_q
-            st.markdown(f"<div class='q-card'><h3>{q.question_text}</h3></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='q-card'><h3>{q['question']}</h3></div>", unsafe_allow_html=True)
             
-            user_input = st.radio("Choose Answer:", q.options, index=None)
-            
-            if st.button("Check Answer"):
-                st.session_state.submitted = True
-                if user_input == q.correct_answer:
-                    st.success("🎯 Correct!")
-                    db.save_score(sub, top, 1)
-                else:
-                    st.error(f"❌ Incorrect. Answer: {q.correct_answer}")
-                    db.save_score(sub, top, 0)
+            if q_style == "MCQ":
+                ans = st.radio("Options:", q['options'], index=None)
+                if st.button("Check Answer"):
+                    st.session_state.submitted = True
+                    if ans == q['answer']: st.success("Correct!")
+                    else: st.error(f"Incorrect. Answer: {q['answer']}")
+            else:
+                st.info("Write your solution. Click below to compare with the IB Mark Scheme.")
+                if st.button("Reveal Model Answer"): st.session_state.submitted = True
 
             if st.session_state.get('submitted'):
                 st.markdown("---")
-                st.markdown(f"<div class='mark-scheme'><strong>IB Mark Scheme:</strong><br>{q.explanation}</div>", unsafe_allow_html=True)
-
-    elif page == "Revision Bank":
-        st.title("🔖 Saved Bank")
-        df_saved = pd.read_sql("SELECT * FROM saved", db.conn)
-        for _, row in df_saved.iterrows():
-            data = json.loads(row['data'])
-            with st.expander(f"{row['subject']} - {row['topic']}"):
-                st.write(data['question_text'])
-                st.info(data['explanation'])
+                if q_style == "Structured (Written)":
+                    st.markdown(f"<div class='mark-scheme'><strong>Model Answer:</strong><br>{q['answer']}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='mark-scheme'><strong>IB Mark Scheme:</strong><br>{q['explanation']}</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
