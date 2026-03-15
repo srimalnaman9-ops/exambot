@@ -3,26 +3,19 @@ import sqlite3
 import json
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import time
 import datetime
 import hashlib
 from typing import Dict, List, Tuple, Optional
 import google.generativeai as genai
 from dataclasses import dataclass, asdict
-from enum import Enum
 import random
-import os
 
 # =============================================================================
-# DATA CLASSES & ENUMS
+# 1. CONFIGURATION & DATA MODELS
 # =============================================================================
 
-class Subject(Enum):
-    MATHEMATICS = "Mathematics"
-    PHYSICS = "Physics"
-    CHEMISTRY = "Chemistry"
-    ENGLISH = "English"
+st.set_page_config(page_title="Exam Ascent AI", layout="wide")
 
 @dataclass
 class Question:
@@ -35,90 +28,77 @@ class Question:
     explanation: str
     difficulty: str
 
-@dataclass
-class StudySession:
-    user_id: str
-    subject: str
-    duration: int
-    timestamp: str
-
 # =============================================================================
-# DATABASE MANAGER
+# 2. DATABASE ORCHESTRATION
 # =============================================================================
 
 class DatabaseManager:
-    def __init__(self, db_path: str = "ibcp_exam_prep.db"):
-        self.db_path = db_path
-        self.init_database()
-    
-    def init_database(self):
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute('CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS quiz_results (
-            id TEXT PRIMARY KEY, user_id TEXT, subject TEXT, topic TEXT, 
-            score INTEGER, total INTEGER, timestamp TIMESTAMP)''')
+    def __init__(self):
+        self.conn = sqlite3.connect("ib_prep.db", check_same_thread=False)
+        self.create_tables()
+
+    def create_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS results (
+            subject TEXT, topic TEXT, score INTEGER, timestamp DATETIME)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS saved_questions (
-            id TEXT PRIMARY KEY, user_id TEXT, subject TEXT, topic TEXT, question_data TEXT)''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS study_sessions (
-            user_id TEXT, subject TEXT, duration INTEGER, timestamp TIMESTAMP)''')
-        conn.commit()
-        conn.close()
+            id TEXT PRIMARY KEY, subject TEXT, topic TEXT, data TEXT)''')
+        self.conn.commit()
 
-    def save_result(self, user_id, subject, topic, score, total):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        res_id = hashlib.md5(f"{user_id}{time.time()}".encode()).hexdigest()[:8]
-        cursor.execute("INSERT INTO quiz_results VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (res_id, user_id, subject, topic, score, total, datetime.datetime.now()))
-        conn.commit()
-        conn.close()
+    def log_result(self, subject, topic, score):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO results VALUES (?, ?, ?, ?)",
+                       (subject, topic, score, datetime.datetime.now()))
+        self.conn.commit()
 
-    def save_question(self, user_id, question: Question):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO saved_questions VALUES (?, ?, ?, ?, ?)",
-                       (question.id, user_id, question.subject, question.topic, json.dumps(asdict(question))))
-        conn.commit()
-        conn.close()
+    def save_q(self, question: Question):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO saved_questions VALUES (?, ?, ?, ?)",
+                       (question.id, question.subject, question.topic, json.dumps(asdict(question))))
+        self.conn.commit()
 
 db = DatabaseManager()
 
 # =============================================================================
-# AI ENGINE
+# 3. AI GENERATION ENGINE (REVISION VILLAGE & SAVE MY EXAMS STYLE)
 # =============================================================================
 
-class AIQuestionGenerator:
+class AIEngine:
     def __init__(self):
-        # Auto-detect API key from secrets
         api_key = st.secrets.get("GEMINI_API_KEY")
         if not api_key:
-            st.error("Missing GEMINI_API_KEY in Streamlit Secrets!")
+            st.error("API Key missing! Add GEMINI_API_KEY to Streamlit Secrets.")
             st.stop()
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        self.syllabus = {
-            "Mathematics": ["Algebra", "Functions", "Trigonometry", "Calculus"],
-            "Physics": ["Mechanics", "Thermal", "Waves", "Electricity"],
-            "Chemistry": ["Atomic Structure", "Bonding", "Organic", "Stoichiometry"],
-            "English": ["Reading Analysis", "Essay Planning", "Formal Writing"]
-        }
 
-    def generate(self, subject, topic, level) -> Optional[Question]:
+    def generate_question(self, subject, topic, level):
+        # LEVEL LOGIC: Chemistry is SL, others are HL as requested
+        level_type = "Standard Level (SL)" if subject == "Chemistry" else "Higher Level (HL)"
+        
         prompt = f"""
-        Generate a professional IB DP {subject} exam question.
-        Topic: {topic}. Difficulty: Level {level}/5.
-        Style: Modeled after Revision Village / Save My Exams.
-        Return ONLY a JSON object with keys: 
-        'question', 'options' (list of 4), 'answer' (exact string), 'explanation'.
-        Use LaTeX for math symbols (e.g. $x^2$).
+        Act as an IB Examiner. Research patterns from Revision Village and Save My Exams.
+        Create a unique {level_type} {subject} question on '{topic}'.
+        Difficulty: Level {level} of 5.
+        
+        Rules:
+        - Use IB Command Terms ('Calculate', 'Deduce', 'Determine', 'Explain').
+        - Use LaTeX for ALL math/science notation ($...$).
+        - Provide a rigorous, step-by-step IB Marking Scheme in the explanation.
+        
+        Return ONLY valid JSON:
+        {{
+            "question": "text",
+            "options": ["A", "B", "C", "D"],
+            "answer": "exact string from options",
+            "explanation": "Step-by-step breakdown"
+        }}
         """
         try:
             response = self.model.generate_content(prompt)
             data = json.loads(response.text.strip().replace("```json", "").replace("```", ""))
             return Question(
-                id=hashlib.md5(data['question'].encode()).hexdigest()[:8],
+                id=hashlib.md5(data['question'].encode()).hexdigest()[:10],
                 subject=subject, topic=topic,
                 question_text=data['question'],
                 options=data['options'],
@@ -126,107 +106,111 @@ class AIQuestionGenerator:
                 explanation=data['explanation'],
                 difficulty=str(level)
             )
-        except:
+        except Exception as e:
+            st.error(f"AI Error: {e}")
             return None
 
 # =============================================================================
-# UI COMPONENTS
+# 4. MAIN USER INTERFACE
 # =============================================================================
 
-def apply_styles():
+def main():
     st.markdown("""
-    <style>
-    .metric-card { background: #1E293B; padding: 20px; border-radius: 15px; text-align: center; border: 1px solid #334155; }
-    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background: linear-gradient(90deg, #4F46E5, #7C3AED); color: white; border: none; }
-    .question-box { background: #0F172A; padding: 25px; border-radius: 15px; border-left: 5px solid #6366F1; margin-bottom: 20px; }
-    </style>
+        <style>
+        .stButton>button { background: linear-gradient(90deg, #4F46E5, #7C3AED); color: white; border: none; font-weight: bold; height: 3em; }
+        .q-card { background-color: #111827; padding: 25px; border-radius: 15px; border-left: 5px solid #6366F1; margin-bottom: 20px; }
+        .ans-card { background-color: #064E3B; padding: 20px; border-radius: 10px; margin-top: 20px; }
+        </style>
     """, unsafe_allow_html=True)
 
-def main():
-    apply_styles()
-    st.sidebar.title("📚 Exam Ascent AI")
+    st.sidebar.title("🚀 Exam Ascent AI")
+    page = st.sidebar.radio("Navigation", ["Dashboard", "Practice Lab", "Saved Bank"])
     
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = "user_default"
-    
-    ai = AIQuestionGenerator()
-    menu = st.sidebar.radio("Navigate", ["Dashboard", "AI Practice Lab", "Study Timer", "Saved Items"])
+    ai = AIEngine()
 
-    if menu == "Dashboard":
-        st.markdown("<h1 style='text-align: center;'>Exam Ascent AI Dashboard</h1>", unsafe_allow_html=True)
+    if page == "Dashboard":
+        st.title("Performance Overview")
+        df = pd.read_sql("SELECT * FROM results", db.conn)
         
-        # Analytics Query
-        conn = sqlite3.connect("ibcp_exam_prep.db")
-        df = pd.read_sql_query("SELECT * FROM quiz_results", conn)
-        conn.close()
-        
-        c1, c2, c3 = st.columns(3)
-        with c1: st.markdown(f"<div class='metric-card'><h3>{len(df)}</h3><p>Solved</p></div>", unsafe_allow_html=True)
-        with c2: 
-            acc = f"{int(df['score'].sum()/df['total'].sum()*100)}%" if not df.empty else "0%"
-            st.markdown(f"<div class='metric-card'><h3>{acc}</h3><p>Accuracy</p></div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='metric-card'><h3>12</h3><p>Study Streak</p></div>", unsafe_allow_html=True)
-
         if not df.empty:
-            st.subheader("Performance Trend")
-            fig = px.line(df, x='timestamp', y='score', color='subject', markers=True, template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True)
+            c1, c2 = st.columns(2)
+            # Accuracy Bar Chart
+            fig1 = px.bar(df.groupby('subject')['score'].mean().reset_index(), 
+                          x='subject', y='score', title="Avg Accuracy by Subject", template="plotly_dark")
+            c1.plotly_chart(fig1, use_container_width=True)
+            
+            # Study Trend
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            fig2 = px.line(df, x='timestamp', y='score', title="Study History", template="plotly_dark")
+            c2.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No data yet. Start practicing in the Lab!")
 
-    elif menu == "AI Practice Lab":
-        st.title("🧪 Practice Lab")
+    elif page == "Practice Lab":
+        st.title("🧪 AI Practice Lab")
+        
         col1, col2, col3 = st.columns(3)
-        sub = col1.selectbox("Subject", list(ai.syllabus.keys()))
-        top = col2.selectbox("Topic", ai.syllabus[sub])
+        sub = col1.selectbox("Subject", ["Mathematics", "Physics", "Chemistry", "English"])
+        
+        # Display Level Badge
+        lvl_tag = "IB HL" if sub != "Chemistry" else "IB SL"
+        st.info(f"Currently generating: **{lvl_tag}** questions (Style: Revision Village)")
+
+        topics_map = {
+            "Mathematics": ["Algebra", "Functions", "Trigonometry", "Calculus", "Vectors"],
+            "Physics": ["Mechanics", "Thermal", "Waves", "Electricity", "Atomic"],
+            "Chemistry": ["Stoichiometry", "Atomic Structure", "Periodicity", "Bonding", "Organic"],
+            "English": ["Reading Analysis", "Essay Planning", "Argumentation"]
+        }
+        
+        top = col2.selectbox("Topic", topics_map[sub])
         lvl = col3.slider("Difficulty", 1, 5, 3)
 
-        if st.button("Generate Question"):
-            with st.spinner("AI is crafting your question..."):
-                st.session_state.q = ai.generate(sub, top, lvl)
-                st.session_state.answered = False
+        if st.button("Generate Exam Question", use_container_width=True):
+            with st.spinner("AI is analyzing exam patterns..."):
+                st.session_state.current_q = ai.generate_question(sub, top, lvl)
+                st.session_state.show_ans = False
 
-        if "q" in st.session_state and st.session_state.q:
-            q = st.session_state.q
-            st.markdown(f"<div class='question-box'><h4>{q.question_text}</h4></div>", unsafe_allow_html=True)
+        if "current_q" in st.session_state and st.session_state.current_q:
+            q = st.session_state.current_q
             
-            choice = st.radio("Choose the correct answer:", q.options, index=None)
+            # Question Card
+            st.markdown(f"<div class='q-card'><h4>{q.question_text}</h4></div>", unsafe_allow_html=True)
             
-            if st.button("Submit Answer"):
-                if choice == q.correct_answer:
-                    st.success("✅ Correct! Excellent Work.")
-                    db.save_result(st.session_state.user_id, sub, top, 1, 1)
+            # Multiple Choice Logic
+            user_choice = st.radio("Select the correct answer:", q.options, index=None)
+            
+            if st.button("Check Answer"):
+                if user_choice:
+                    st.session_state.show_ans = True
+                    if user_choice == q.correct_answer:
+                        st.success("Correct Answer!")
+                        db.log_result(sub, top, 1)
+                    else:
+                        st.error(f"Incorrect. The answer is: {q.correct_answer}")
+                        db.log_result(sub, top, 0)
                 else:
-                    st.error(f"❌ Incorrect. Correct answer was: {q.correct_answer}")
-                    db.save_result(st.session_state.user_id, sub, top, 0, 1)
-                
-                with st.expander("View Full Marking Scheme"):
-                    st.write(q.explanation)
-                
-                if st.button("Save Question to Revision Set"):
-                    db.save_question(st.session_state.user_id, q)
-                    st.toast("Saved!")
+                    st.warning("Please select an option.")
 
-    elif menu == "Study Timer":
-        st.title("⏲️ Focus Timer")
-        col1, col2 = st.columns([1, 2])
-        mins = col1.number_input("Focus Duration (mins)", 25)
-        if col1.button("Start Pomodoro"):
-            ph = col2.empty()
-            for i in range(mins * 60, 0, -1):
-                m, s = divmod(i, 60)
-                ph.markdown(f"<h1 style='font-size: 100px; text-align: center;'>{m:02d}:{s:02d}</h1>", unsafe_allow_html=True)
-                time.sleep(1)
-            st.balloons()
+            # IB Marking Scheme Reveal
+            if st.session_state.get('show_ans'):
+                st.markdown("---")
+                st.subheader("📝 Step-by-Step Marking Scheme")
+                st.markdown(f"<div class='ans-card'>{q.explanation}</div>", unsafe_allow_html=True)
+                
+                if st.button("Save to Revision Bank"):
+                    db.save_q(q)
+                    st.toast("Question Saved!")
 
-    elif menu == "Saved Items":
-        st.title("🔖 Revision Bank")
-        conn = sqlite3.connect("ibcp_exam_prep.db")
-        df = pd.read_sql_query("SELECT * FROM saved_questions", conn)
-        conn.close()
-        for _, row in df.iterrows():
+    elif page == "Saved Bank":
+        st.title("🔖 Your Saved Questions")
+        df_saved = pd.read_sql("SELECT * FROM saved_questions", db.conn)
+        for _, row in df_saved.iterrows():
+            data = json.loads(row['data'])
             with st.expander(f"{row['subject']} - {row['topic']}"):
-                data = json.loads(row['question_data'])
                 st.write(data['question_text'])
-                st.info(f"Correct Answer: {data['correct_answer']}")
+                st.write(f"**Answer:** {data['correct_answer']}")
+                st.info(data['explanation'])
 
 if __name__ == "__main__":
     main()
