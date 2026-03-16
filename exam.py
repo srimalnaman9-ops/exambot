@@ -1939,9 +1939,17 @@ def render_sidebar():
         st.markdown("<br>", unsafe_allow_html=True)
 
         # ── Active AI model badge ─────────────────────────────────────────
+        # Use getattr throughout to survive stale session-state objects
+        # that were cached before a code update.
         ai_instance = st.session_state.get("ai")
-        if ai_instance and ai_instance.is_ready():
-            model_label = ai_instance.get_model_name()
+        _is_ready = callable(getattr(ai_instance, "is_ready", None)) and ai_instance.is_ready()
+        if ai_instance and _is_ready:
+            # Prefer model_name attribute; fall back to get_model_name(); then a sensible default
+            model_label = (
+                getattr(ai_instance, "model_name", None)
+                or (getattr(ai_instance, "get_model_name", lambda: None)())
+                or "gemini (auto)"
+            )
             st.markdown(
                 f'<div style="background:#0a1a2a;border:1px solid #1e3a5f;border-radius:8px;'
                 f'padding:.6rem .8rem;text-align:center;margin-bottom:.6rem">'
@@ -1972,10 +1980,15 @@ def render_sidebar():
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     """Main application entry point."""
-    # Initialise singletons (cached for session)
-    if "db" not in st.session_state:
+    # Initialise singletons — also replace stale objects missing attributes
+    # added in newer code versions (avoids AttributeError after deploys).
+    if "db" not in st.session_state or not isinstance(st.session_state["db"], Database):
         st.session_state["db"] = Database()
-    if "ai" not in st.session_state:
+    if (
+        "ai" not in st.session_state
+        or not isinstance(st.session_state["ai"], GeminiAI)
+        or not hasattr(st.session_state["ai"], "model_name")
+    ):
         st.session_state["ai"] = GeminiAI()
 
     db: Database = st.session_state["db"]
