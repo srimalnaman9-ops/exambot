@@ -635,10 +635,32 @@ class Database:
 # GEMINI  AI CLASS
 # ─────────────────────────────────────────────────────────────────────────────
 class GeminiAI:
-    """Wrapper around Google Gemini API for all AI-generated content."""
+    """Wrapper around Google Gemini API for all AI-generated content.
+
+    The Gemini model is chosen automatically at runtime by querying the
+    available models list.  Priority order (best → fallback):
+      1. gemini-2.5-pro   (latest flagship, most capable)
+      2. gemini-2.0-flash (fast, multimodal)
+      3. gemini-1.5-pro   (strong all-rounder)
+      4. gemini-1.5-flash (efficient workhorse)
+      5. gemini-pro       (legacy stable)
+    The first model that the API reports as available for
+    'generateContent' is selected.  This means the app always uses the
+    newest model the account has access to without any manual edits.
+    """
+
+    # Preference order — newest / most capable first
+    _MODEL_PRIORITY = [
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "gemini-pro",
+    ]
 
     def __init__(self):
-        self.model = None
+        self.model       = None
+        self.model_name  = None          # name of the selected model
         self._configured = False
         self._configure()
 
@@ -646,13 +668,47 @@ class GeminiAI:
         try:
             api_key = st.secrets["GEMINI_API_KEY"]
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel("gemini-1.5-flash")
+
+            # ── Auto-detect best available model ─────────────────────────
+            selected = self._detect_best_model()
+            self.model_name  = selected
+            self.model       = genai.GenerativeModel(selected)
             self._configured = True
-        except Exception as e:
+
+        except Exception:
             self._configured = False
+
+    @staticmethod
+    def _detect_best_model() -> str:
+        """Query the API for available models and return the best match."""
+        try:
+            available = [
+                m.name.replace("models/", "")
+                for m in genai.list_models()
+                if "generateContent" in (m.supported_generation_methods or [])
+            ]
+            for preferred in GeminiAI._MODEL_PRIORITY:
+                # exact match
+                if preferred in available:
+                    return preferred
+                # prefix match (e.g. "gemini-2.0-flash-exp" matches "gemini-2.0-flash")
+                for name in available:
+                    if name.startswith(preferred):
+                        return name
+            # Last-resort: pick first generateContent-capable model
+            if available:
+                return available[0]
+        except Exception:
+            pass
+        # Hard fallback — known stable model
+        return "gemini-1.5-flash"
 
     def is_ready(self) -> bool:
         return self._configured
+
+    def get_model_name(self) -> str:
+        """Return the name of the currently active model."""
+        return self.model_name or "unknown"
 
     def _call(self, prompt: str, max_tokens: int = 2048) -> Optional[str]:
         """Low-level Gemini API call with error handling."""
@@ -1881,8 +1937,33 @@ def render_sidebar():
             )
 
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Active AI model badge ─────────────────────────────────────────
+        ai_instance = st.session_state.get("ai")
+        if ai_instance and ai_instance.is_ready():
+            model_label = ai_instance.get_model_name()
+            st.markdown(
+                f'<div style="background:#0a1a2a;border:1px solid #1e3a5f;border-radius:8px;'
+                f'padding:.6rem .8rem;text-align:center;margin-bottom:.6rem">'
+                f'<div style="font-size:.6rem;color:#4a6a8a;letter-spacing:.1em;margin-bottom:.3rem">🤖 ACTIVE AI MODEL</div>'
+                f'<div style="font-size:.72rem;font-weight:600;color:#63b3ed;font-family:JetBrains Mono,monospace;word-break:break-all">{model_label}</div>'
+                f'<div style="font-size:.6rem;color:#276749;margin-top:.25rem">● Connected</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="background:#1a0a0a;border:1px solid #c53030;border-radius:8px;'
+                'padding:.6rem .8rem;text-align:center;margin-bottom:.6rem">'
+                '<div style="font-size:.6rem;color:#fc8181;letter-spacing:.1em">🤖 AI MODEL</div>'
+                '<div style="font-size:.7rem;color:#fc8181;margin-top:.2rem">● Not connected</div>'
+                '<div style="font-size:.6rem;color:#742a2a;margin-top:.2rem">Add GEMINI_API_KEY</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
         st.markdown(
-            '<div style="text-align:center;font-size:.7rem;color:#2a3a55">Powered by Google Gemini AI<br>© 2026 Exam Ascent AI</div>',
+            '<div style="text-align:center;font-size:.65rem;color:#2a3a55">Powered by Google Gemini AI<br>© 2026 Exam Ascent AI</div>',
             unsafe_allow_html=True,
         )
 
